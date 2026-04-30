@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+import json, sys, os
+from datetime import datetime, timezone
+
+C = {"B":"\033[1m","D":"\033[2m","R":"\033[0m","k":"\033[90m","r":"\033[91m","g":"\033[92m","y":"\033[93m","b":"\033[94m","m":"\033[95m","c":"\033[96m"}
+tt=sys.stdout.isatty()
+def c(col): return C[col] if tt else ""
+def hr(): return f"{c('b')}{'═'*70}{c('R')}"
+def div(): return f"{c('k')}┈{c('R')}"
+def fmt_time(iso):
+    try: return datetime.fromisoformat(iso.replace("Z","+00:00")).astimezone().strftime("%b %d %H:%M %Z")
+    except: return iso[:10] if iso else "?"
+def ago(iso):
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z","+00:00"))
+        diff = datetime.now(timezone.utc) - dt
+        s = diff.total_seconds()
+        if s<60: return f"{int(s)}s ago"
+        if s<3600: return f"{int(s//60)}m ago"
+        if s<86400: return f"{int(s//3600)}h ago"
+        return f"{int(s//86400)}d ago"
+    except: return "?"
+
+# Load data files
+def load(p):
+    with open(p) as f: return json.load(f)
+
+threads = load("/tmp/threads.json").get("data",{}).get("threads",[])
+approvals = load("/tmp/approvals.json").get("data",{}).get("requests",[])
+total_approvals = load("/tmp/approvals.json").get("data",{}).get("total",0)
+agent = load("/tmp/agents.json").get("data",{}).get("agents",[{}])[0]
+
+unread_total = sum(t.get("unreadMessages",0) for t in threads)
+pending = [a for a in approvals if a.get("status")=="pending"]
+approved = [a for a in approvals if a.get("status")=="approved"]
+
+print(f"\n{c('B')}╔═══════════════════════════════════════════════════════════════════════╗{c('R')}")
+print(f"{c('B')}║  🛰️  MASUMI DASHBOARD — {agent.get('displayName','?')}  {c('R')}")
+print(f"{c('B')}╚═══════════════════════════════════════════════════════════════════════╝{c('R')}\n")
+
+print(f"{c('y')}👤 Agent{c('R')}  {agent.get('slug','?')}  Status: {c('g')}active, published, managed{c('R')}")
+print(f"{c('y')}📥 Inbox{c('R')}  Unread: {c('r') if unread_total else c('g')}{unread_total}{c('R')}  Threads: {len(threads)}")
+
+if unread_total:
+    for t in threads:
+        if t.get("unreadMessages"): print(f"   · {t['label']} — {t['unreadMessages']} unread")
+
+print(f"\n{div()}\n{c('y')}💬 Threads ({len(threads)}){c('R')}")
+for i,t in enumerate(threads,1):
+    icons = ("👥" if t["kind"]=="group" else "👤") + ("🔒" if t.get("locked") else " ")
+    last = ago(t.get("lastMessageAt",""))
+    arch = f" {c('m')}[archived]{c('R')}" if t.get("archived") else ""
+    print(f"  {i}. {icons} {c('B')}{t['label']:<32}{c('R')} | {t['participantCount']} pax | {last:>8}{arch}")
+
+print(f"\n{div()}\n{c('y')}✅ Approvals — {total_approvals} total{c('R')}")
+print(f"   {c('g')}Approved: {len(approved)}{c('R')}   {c('r')}Pending: {len(pending)}{c('R')}")
+if pending:
+    print(f"\n   {c('B')}⏳ Pending — reply to validate:{c('R')}")
+    for a in pending[:10]:
+        target = a.get("target",{})
+        name = target.get("displayName") or target.get("slug","?")
+        print(f"     · {name:<30} ({a.get('messageCount','?')} msgs)  id:{a.get('threadId','?')[:12]}")
+    if len(pending)>10: print(f"     ... +{len(pending)-10} more")
+
+print(f"\n{div()}\n{c('y')}⚡ Actions{c('R')}")
+if pending: print(f"  Approve all: {c('B')}masumi thread approval approve --all{c('R')}")
+print(f"  Unread:      {c('B')}masumi thread unread{c('R')}")
+print(f"  Visual:      {c('B')}inbox_view{c('R')}  (pipe unread --json into it)")
+print()
