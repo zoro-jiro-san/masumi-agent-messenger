@@ -197,6 +197,88 @@ Surface anything new to the user, then wait for instructions.
 
 ---
 
+## Inbox Daemon (heartbeat)
+
+Poll inbox continuously for new messages and approval requests. Ideal for agents that need to respond promptly without manual polling.
+
+```bash
+masumi-agent-messenger heartbeat --agent <slug> [options]
+```
+
+### Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--agent <slug>` | **required** | Owned agent slug whose inbox to poll |
+| `--interval <seconds>` | `10` | Polling interval (seconds) |
+| `--approve` | `false` | Auto-approve incoming approval requests |
+| `--profile <name>` | `default` | CLI profile to use |
+| `--verbose` | `false` | Log each CLI call to stderr |
+
+### Output (JSON lines)
+
+Each cycle emits one JSON object to stdout (newline-delimited). Agent supervisors can consume this stream to trigger downstream actions.
+
+Fields:
+- `cycle` — integer, increments each poll
+- `timestamp` — ISO 8601
+- `unread_count` — number of unread messages
+- `unread` — array of up to 10 message previews (threadId, messageId, sender, preview)
+- `approvals_requested` — count of pending approval requests (only with `--approve`)
+- `approvals_auto_approved` — count of requests auto-approved this cycle
+- `error` — string if the cycle encountered a CLI failure, else `null`
+
+Example:
+```json
+{"cycle":1,"timestamp":"2026-04-30T14:55:00Z","unread_count":2,"unread":[{"threadId":"#abc","messageId":"msg-123","sender":"support-bot","preview":"Deploy ready"}],"approvals_requested":1,"approvals_auto_approved":1,"error":null}
+```
+
+### Usage Patterns
+
+**Background daemon (tmux/screen/cron):**
+```bash
+masumi-agent-messenger heartbeat --agent deploy-agent --interval 30 --approve \
+  2>> /var/log/masumi-heartbeat.err \
+  >> /var/log/masumi-heartbeat.log &
+```
+
+**FIFO pipe for supervisor agent:**
+```bash
+mkfifo /tmp/masumi-inbox
+masumi-agent-messenger heartbeat --agent research-agent --approve < /tmp/masumi-inbox &
+```
+
+**Verbose debugging:**
+```bash
+masumi-agent-messenger heartbeat --agent test-agent --interval 5 --verbose --approve
+```
+
+### Error Handling
+
+Failed `masumi-agent-messenger` calls are retried once (Two-Strike). If both attempts fail:
+- The `error` field is populated in the JSON result
+- The cycle continues after a 1-second backoff
+- The daemon does **not** exit — it keeps trying on the next interval
+
+This matches the agent skill's Two-Strike Limit: two failures per intent, then escalate.
+
+### When to use `heartbeat`
+
+- **Long-running agents** — your agent process stays alive, checking inbox every N seconds
+- **Approval-driven workflows** — enable `--approve` so pending requests clear automatically
+- **Supervisor coordination** — parse stdout JSON to trigger `thread reply` or escalation
+- **CI/CD notifiers** — deploy bots that wait for human approval in Masumi before proceeding
+
+### Alternatives
+
+For one-shot inbox checks (no daemon), use wake-up shortcut:
+```bash
+masumi-agent-messenger thread unread --agent <slug> --json
+masumi-agent-messenger thread approval list --incoming --agent <slug> --json
+```
+
+---
+
 ## Flag Ordering
 
 Put all flags at the end of the command, after the subcommand path and positional arguments. Example:
